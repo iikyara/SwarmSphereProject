@@ -1,0 +1,236 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel TestMethod
+#pragma kernel TestTextureCopy
+#pragma kernel MaskCopy
+#pragma kernel AlphaJoin
+#pragma kernel AlphaJoin2
+#pragma kernel DrawPoint
+#pragma kernel CompositLayer_Add
+#pragma kernel DrawPointOnMask
+#pragma kernel ApplyDraw
+#pragma kernel ApplyDraw_Erace
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+// for All
+uint2 ResultSize;
+
+// for TestMethod
+RWStructuredBuffer<int> intBuffer;
+int intValue;
+
+// for MaskCopy
+RWTexture2D<float> MaskBuffer;
+//Texture2D<float4> Texture1;
+
+// for AlphaJoin
+RWTexture2D<float4> TextureBuffer;
+uint2 TextureSize;
+//RWStructuredBuffer<float4> TextureBuffer;
+Texture2D<float4> Texture1;
+Texture2D<float4> Texture2;
+
+// for AlphaJoin2
+//RWTexture2D<float4> TextureBuffer;
+float Attenuation;
+
+// for Draw
+//RWTexture2D<float4> TextureBuffer;
+Texture2D<float4> PenTexture;   //ペンのテクスチャ
+uint2 PenTextureSize;           //ペンのテクスチャサイズ
+int2 Point;                    //描画座標
+float4 Color;                   //色
+float Thick;                    //ペンの太さ
+
+// for CompositLayer_Add
+//RWTexture2D<float4> TextureBuffer;
+//uint2 TextureSize;
+Texture2D<float4> LayerTexture;   //上位レイヤーのテクスチャ
+uint2 LayerTextureSize;           //上位レイヤ―のテクスチャサイズ
+
+// for DrawPointOnMask
+//RWTexture2D<float> MaskBuffer;
+uint2 MaskSize;
+//Texture2D<float4> PenTexture;   //ペンのテクスチャ
+//uint2 PenTextureSize;           //ペンのテクスチャサイズ
+//uint2 Point;                    //描画座標
+//float Thick;                    //ペンの太さ
+
+// for ApplyDraw
+//RWTexture2D<float4> TextureBuffer;
+//uint2 TextureSize;
+Texture2D<float> MaskTexture;
+//float4 Color;
+
+// for ApplyDraw_Erace
+//RWTexture2D<float4> TextureBuffer;
+//uint2 TextureSize;
+//Texture2D<float> MaskTexture;
+float Transparency;
+
+/* 汎用関数定義 */
+float4 Copy(uint3 id : SV_DispatchThreadID);
+int2 ID2Point(uint3 id);
+float4 PointToPenTextureColor(int2 p, Texture2D<float4> tex, int2 texLoc, uint2 texSize);
+int2 MainPointToSubPoint(int2 p, int2 subLoc);
+bool IsPointInRect(int2 p, int2 rectLoc, uint2 rectSize);
+float4 Color_Sum(float4 c1, float4 c2);
+float Mask_Sum(float m1, float m2);
+float SumFloatInMaxValue(float v1, float v2, float max);
+float SubFloatInMinValue(float v1, float v2, float min);
+float4 CorrectColor(float4 color);
+
+/* メイン関数 */
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+
+    Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+}
+
+[numthreads(4, 1, 1)]
+void TestMethod(uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID)
+{
+    intBuffer[groupThreadID.x] = groupThreadID.x * intValue;
+}
+
+[numthreads(1, 1, 1)]
+void TestTextureCopy(uint3 id : SV_DispatchThreadID)
+{
+    TextureBuffer[id.xy] = Texture1[id.xy];
+}
+
+[numthreads(32, 32, 1)]
+void MaskCopy(uint3 id : SV_DispatchThreadID)
+{
+    MaskBuffer[id.xy] = Texture1[id.xy].w;
+    //MaskBuffer[id.xy] = Thick;
+}
+
+[numthreads(32, 32, 1)]
+void AlphaJoin(uint3 id : SV_DispatchThreadID)
+{
+    TextureBuffer[id.xy] = Texture1[id.xy] * Texture2[id.xy];
+}
+
+[numthreads(32, 32, 1)]
+void AlphaJoin2(uint3 id : SV_DispatchThreadID)
+{
+    TextureBuffer[id.xy] = Texture1[id.xy] * ((1.0f - Texture2[id.xy]) * (1.0f - Attenuation) + Attenuation);
+}
+
+[numthreads(32, 32, 1)]
+void DrawPoint(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = ID2Point(id);
+    float4 color = PointToPenTextureColor(p, PenTexture, Point, PenTextureSize);
+    TextureBuffer[id.xy] = Color_Sum(TextureBuffer[id.xy], color);
+}
+
+[numthreads(32, 32, 1)]
+void CompositLayer_Add(uint3 id : SV_DispatchThreadID)
+{
+    TextureBuffer[id.xy] = Color_Sum(TextureBuffer[id.xy], LayerTexture[id.xy]);
+}
+
+[numthreads(32, 32, 1)]
+void DrawPointOnMask(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = ID2Point(id);
+    float4 color = PointToPenTextureColor(p, PenTexture, Point, PenTextureSize);
+    MaskBuffer[id.xy] = Mask_Sum(MaskBuffer[id.xy], color.w);
+}
+
+[numthreads(32, 32, 1)]
+void ApplyDraw(uint3 id : SV_DispatchThreadID)
+{
+    float4 color = Color;
+    color.w = color.w * MaskTexture[id.xy];
+    TextureBuffer[id.xy] = CorrectColor(Color_Sum(TextureBuffer[id.xy], color));
+}
+
+[numthreads(32, 32, 1)]
+void ApplyDraw_Erace(uint3 id : SV_DispatchThreadID)
+{
+    float transparency = Transparency * MaskTexture[id.xy];
+    TextureBuffer[id.xy] = float4(
+        TextureBuffer[id.xy].r, 
+        TextureBuffer[id.xy].g,
+        TextureBuffer[id.xy].b,
+        SubFloatInMinValue(TextureBuffer[id.xy].w, transparency, 0.0)
+    );
+}
+
+/* 汎用関数 */
+
+float4 Copy(uint3 id : SV_DispatchThreadID)
+{
+    return PenTexture[id.xy];
+}
+
+int2 ID2Point(uint3 id)
+{
+    return int2(id.x, id.y);
+}
+
+float4 PointToPenTextureColor(int2 p, Texture2D<float4> tex, int2 texLoc, uint2 texSize)
+{
+    if (!IsPointInRect(p, texLoc, texSize)) return float4(0.0, 0.0, 0.0, 0.0);
+    int2 sp = MainPointToSubPoint(p, texLoc);
+    return tex[sp.xy];
+}
+
+int2 MainPointToSubPoint(int2 p, int2 subLoc)
+{
+    return int2(p.x - subLoc.x, p.y - subLoc.y);
+}
+
+bool IsPointInRect(int2 p, int2 rectLoc, uint2 rectSize)
+{
+    int2 rs = int2((int)rectSize.x, (int)rectSize.y);
+    return rectLoc.x < p.x&& rectLoc.x + rs.x > p.x
+        && rectLoc.y < p.y&& rectLoc.y + rs.y > p.y;
+}
+
+float4 Color_Sum(float4 c1, float4 c2)
+{
+    float4 res = c1 + (c2 - c1) * (c2.w);
+    res.w = SumFloatInMaxValue(c1.w, c2.w, 1.0);
+    return res;
+}
+
+float Mask_Sum(float m1, float m2)
+{
+    return SumFloatInMaxValue(m1, m2, 1.0);
+}
+
+float SumFloatInMaxValue(float v1, float v2, float max)
+{
+    float res = v1 + v2;
+    if (res > max) res = max;
+    return res;
+}
+
+float SubFloatInMinValue(float v1, float v2, float min)
+{
+    float res = v1 - v2;
+    if (res < min) res = min;
+    return res;
+}
+
+float4 CorrectColor(float4 color)
+{
+    if (color.x < 0.0) color.x = 0.0;
+    else if (color.x > 1.0) color.x = 1.0;
+    if (color.y < 0.0) color.y = 0.0;
+    else if (color.y > 1.0) color.y = 1.0;
+    if (color.z < 0.0) color.z = 0.0;
+    else if (color.z > 1.0) color.z = 1.0;
+    if (color.w < 0.0) color.w = 0.0;
+    else if (color.w > 1.0) color.w = 1.0;
+    return color;
+}
